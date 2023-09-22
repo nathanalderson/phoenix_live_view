@@ -104,6 +104,17 @@ defmodule Phoenix.LiveView.StreamTest do
     assert lv |> render() |> users_in_dom("admins") == [{"admins-2", "updated"}]
   end
 
+  test "stream reset in handle_event", %{conn: conn} do
+    {:ok, lv, _} = live(conn, "/stream")
+
+    lv |> render_hook("reset-users", %{})
+    # test passes if the following two lines are removed
+    lv |> render_hook("stream-users", %{})
+    lv |> render_hook("reset-users", %{})
+
+    refute lv |> element("#users div") |> has_element?()
+  end
+
   test "stream reset on patch", %{conn: conn} do
     {:ok, lv, _html} = live(conn, "/healthy/fruits")
 
@@ -218,10 +229,9 @@ defmodule Phoenix.LiveView.StreamTest do
     {:ok, lv, _html} = live(conn, "/stream")
 
     assert Phoenix.LiveViewTest.HooksLive.exits_with(lv, ArgumentError, fn ->
-      render_click(lv, "consume-stream-invalid", %{})
-    end) =~ ~r/streams can only be consumed directly by a for comprehension/
+             render_click(lv, "consume-stream-invalid", %{})
+           end) =~ ~r/streams can only be consumed directly by a for comprehension/
   end
-
 
   defp assert_pruned_stream(lv) do
     stream = StreamLive.run(lv, fn socket -> {:reply, socket.assigns.streams.users, socket} end)
