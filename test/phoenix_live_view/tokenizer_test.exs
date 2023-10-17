@@ -45,7 +45,7 @@ defmodule Phoenix.LiveView.TokenizerTest do
       assert tokenize("<!DOCTYPE\nhtml\n>  <br />") == [
                {:text, "<!DOCTYPE\nhtml\n>  ", %{line_end: 3, column_end: 4}},
                {:tag, "br", [],
-                %{column: 4, line: 3, self_close: true, tag_name: "br", inner_location: {3, 10}}}
+                %{column: 4, line: 3, closing: :void, tag_name: "br", inner_location: {3, 10}}}
              ]
     end
   end
@@ -82,7 +82,7 @@ defmodule Phoenix.LiveView.TokenizerTest do
       <div>
       """
 
-      {first_tokens, cont, _} =
+      {first_tokens, cont} =
         Tokenizer.tokenize(first_part, [], [], :text, tokenizer_state(first_part))
 
       second_part = """
@@ -94,7 +94,7 @@ defmodule Phoenix.LiveView.TokenizerTest do
       </div>
       """
 
-      {tokens, :text, _} =
+      {tokens, :text} =
         Tokenizer.tokenize(second_part, [], first_tokens, cont, tokenizer_state(second_part))
 
       assert Enum.reverse(tokens) == [
@@ -124,7 +124,7 @@ defmodule Phoenix.LiveView.TokenizerTest do
       <%= "Hello" %>
       """
 
-      {first_tokens, cont, _} =
+      {first_tokens, cont} =
         Tokenizer.tokenize(first_part, [], [], :text, tokenizer_state(first_part))
 
       second_part = """
@@ -133,7 +133,7 @@ defmodule Phoenix.LiveView.TokenizerTest do
       <p><%= "World"</p>
       """
 
-      {second_tokens, cont, _} =
+      {second_tokens, cont} =
         Tokenizer.tokenize(second_part, [], first_tokens, cont, tokenizer_state(second_part))
 
       third_part = """
@@ -143,7 +143,7 @@ defmodule Phoenix.LiveView.TokenizerTest do
       </p>
       """
 
-      {tokens, :text, _} =
+      {tokens, :text} =
         Tokenizer.tokenize(third_part, [], second_tokens, cont, tokenizer_state(third_part))
 
       assert Enum.reverse(tokens) == [
@@ -183,7 +183,7 @@ defmodule Phoenix.LiveView.TokenizerTest do
 
     test "self close" do
       tokens = tokenize("<div/>")
-      assert [{:tag, "div", [], %{self_close: true}}] = tokens
+      assert [{:tag, "div", [], %{closing: :self}}] = tokens
     end
 
     test "compute line and column" do
@@ -200,7 +200,7 @@ defmodule Phoenix.LiveView.TokenizerTest do
                {:text, _, %{line_end: 2, column_end: 3}},
                {:tag, "span", [], %{line: 2, column: 3}},
                {:text, _, %{line_end: 4, column_end: 1}},
-               {:tag, "p", [], %{column: 1, line: 4, self_close: true}},
+               {:tag, "p", [], %{column: 1, line: 4, closing: :self}},
                {:tag, "br", [], %{column: 5, line: 4}}
              ] = tokens
     end
@@ -751,7 +751,7 @@ defmodule Phoenix.LiveView.TokenizerTest do
                 %{
                   column: 1,
                   line: 1,
-                  self_close: true,
+                  closing: :self,
                   tag_name: "script",
                   inner_location: {1, 24}
                 }},
@@ -784,7 +784,7 @@ defmodule Phoenix.LiveView.TokenizerTest do
                 %{
                   column: 1,
                   line: 1,
-                  self_close: true,
+                  closing: :self,
                   inner_location: {1, 23},
                   tag_name: "style"
                 }},

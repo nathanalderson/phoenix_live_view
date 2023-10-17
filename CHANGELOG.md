@@ -1,10 +1,21 @@
 # Changelog
 
+## 0.20.1 (2023-10-09)
+
+### Bug fixes
+  * Fix error with live uploads `auto_upload: true` when a file fails to preflight
+  * Fix error with live uploads where an early exit can cause a map key error
+  * Fix match error on live navigation when reconnecting from client
+
+### Enhancements
+  * Support new `meta()` method on File/Blob sublcasses on JavaScript client to allow the client to pass arbitrary metadata when using `upload/uploadTo` from hook. The `%UploadEntry{}`'s new `client_meta` field is populated from this information.
+  * Improve void tagging and error messages
+
 ## 0.20.0 (2023-09-22)
 
 ### Deprecations
   * Deprecate the `~L` sigil in favor of `~H`
-  * Deprecate `preload/1` in LiveComponent in favor of `update_many/2`
+  * Deprecate `preload/1` in LiveComponent in favor of `update_many/1`
   * Deprecate `live_component/2-3` in favor of `<.live_component />`
   * Deprecate `live_patch` in favor of `<.link patch={...} />`
   * Deprecate `live_redirect` in favor of `<.link navigate={...} />`
@@ -16,7 +27,7 @@
   * Remove previously deprecated `live_file_input/2` in favor of `<.live_file_input />`
 
 ### Bug fixes
-  * Fix uploads with `auto_upload: true` failing to propegate errors when any individual entry is invalid
+  * Fix uploads with `auto_upload: true` failing to propagate errors when any individual entry is invalid
   * Fix uploads with `auto_upload: true` failing to auto upload valid entries errors when any individual entry is invalid
   * Fix error on form recovery with `auto_upload: true`
   * Fix issue on form recovery where hidden inputs would be selected by mistake
@@ -26,8 +37,8 @@
   * Fix anchors within contenteditable causing LiveSocket disconnects
 
 ### Enhancements
-  * Add heex debug annotations via `config :phoenix_live_view, :debug_heex_annotations: true`, which provides special HTML comments that wrap around rendered components to help you identify where markup in your HTML document is rendered within your function component tree
-  * Add `assync_async`, `start_async`, `<.async_result>` and, `AsyncResult` for declaratively handling async operations in a LiveView or LiveComponent.
+  * Add heex debug annotations via `config :phoenix_live_view, debug_heex_annotations: true`, which provides special HTML comments that wrap around rendered components to help you identify where markup in your HTML document is rendered within your function component tree
+  * Add `assign_async`, `start_async`, `<.async_result>` and, `AsyncResult` for declaratively handling async operations in a LiveView or LiveComponent.
   * Supporting passing `@myself` for `Phoenix.LiveView.send_update/3`
   * Support change tracking on Access.get
   * Allow overriding `id` of `<.live_img_preview>`

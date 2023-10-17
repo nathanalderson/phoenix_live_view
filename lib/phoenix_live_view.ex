@@ -329,7 +329,7 @@ defmodule Phoenix.LiveView do
         {:ok,
          socket
          |> assign(:foo, "bar")
-         |> assign_async(:org, fn -> {:ok, %{org: fetch_org!(slug)} end)
+         |> assign_async(:org, fn -> {:ok, %{org: fetch_org!(slug)}} end)
          |> assign_async([:profile, :rank], fn -> {:ok, %{profile: ..., rank: ...}} end)}
       end
 
@@ -345,7 +345,7 @@ defmodule Phoenix.LiveView do
 
   ```heex
   <div :if={@org.loading}>Loading organization...</div>
-  <div :if={org = @org.ok? && @org.result}}><%= org.name %> loaded!</div>
+  <div :if={org = @org.ok? && @org.result}><%= org.name %> loaded!</div>
   ```
 
   The `Phoenix.Component.async_result/1` function component can also be used to
@@ -357,14 +357,6 @@ defmodule Phoenix.LiveView do
     <:failed :let={_reason}>there was an error loading the organization</:failed>
     <%= org.name %>
   </.async_result>
-  ```
-
-  Additionally, for async assigns which result in a collection of items, you
-  can enumerate the assign directly. It will only enumerate
-  the results once the results are loaded. For example:
-
-  ```heex
-  <div :for={org <- @orgs}><%= org.name %></div>
   ```
 
   ### Arbitrary async operations
@@ -391,9 +383,9 @@ defmodule Phoenix.LiveView do
       end
 
   `start_async/3` is used to fetch the organization asynchronously. The
-  `handle_async/3` callback is called when the task completes or exits,
+  `c:handle_async/3` callback is called when the task completes or exits,
   with the results wrapped in either `{:ok, result}` or `{:exit, reason}`.
-  The `AsyncResult` module is used to direclty to update the state of the
+  The `AsyncResult` module is used to directly to update the state of the
   async operation, but you can also assign any value directly to the socket
   if you want to handle the state yourself.
   '''
@@ -522,13 +514,27 @@ defmodule Phoenix.LiveView do
   @callback handle_info(msg :: term, socket :: Socket.t()) ::
               {:noreply, Socket.t()}
 
+  @doc """
+  Invoked when the result of an `start_async/3` operation is available.
+
+  For a deeper understanding of using this callback,
+  refer to the ["Arbitrary async operations"](#module-arbitrary-async-operations) section.
+  """
+  @callback handle_async(
+              name :: atom,
+              async_fun_result :: {:ok, term} | {:exit, term},
+              socket :: Socket.t()
+            ) ::
+              {:noreply, Socket.t()}
+
   @optional_callbacks mount: 3,
                       terminate: 2,
                       handle_params: 3,
                       handle_event: 3,
                       handle_call: 3,
                       handle_info: 2,
-                      handle_cast: 2
+                      handle_cast: 2,
+                      handle_async: 3
 
   @doc """
   Uses LiveView in the current module to mark it a LiveView.
@@ -557,6 +563,7 @@ defmodule Phoenix.LiveView do
     * `:namespace` - configures the namespace the `LiveView` is in
 
   """
+
   defmacro __using__(opts) do
     # Expand layout if possible to avoid compile-time dependencies
     opts =
@@ -779,10 +786,11 @@ defmodule Phoenix.LiveView do
     connect_params
     connect_info
     assign_new
+    live_async
     live_layout
+    live_temp
     lifecycle
     root_view
-    __temp__
   )a
   def put_private(%Socket{} = socket, key, value) when key not in @reserved_privates do
     %Socket{socket | private: Map.put(socket.private, key, value)}
@@ -1429,14 +1437,15 @@ defmodule Phoenix.LiveView do
   the live component. If you pass the module, then the `:id` that identifies
   the component must be passed as part of the assigns.
 
-  When the component receives the update, first the optional
-  [`preload/1`](`c:Phoenix.LiveComponent.preload/1`) then
-  [`update/2`](`c:Phoenix.LiveComponent.update/2`) is invoked with the new assigns.
-  If [`update/2`](`c:Phoenix.LiveComponent.update/2`) is not defined
-  all assigns are simply merged into the socket. The assigns received as the
-  first argument of the [`update/2`](`c:Phoenix.LiveComponent.update/2`)
-  callback will only include the _new_ assigns passed from this function.
-  Pre-existing assigns may be found in `socket.assigns`.
+  When the component receives the update,
+  [`update_many/1`](`c:Phoenix.LiveComponent.update_many/1`) will be invoked if
+  it is defined, otherwise [`update/2`](`c:Phoenix.LiveComponent.update/2`) is
+  invoked with the new assigns.  If
+  [`update/2`](`c:Phoenix.LiveComponent.update/2`) is not defined all assigns
+  are simply merged into the socket. The assigns received as the first argument
+  of the [`update/2`](`c:Phoenix.LiveComponent.update/2`) callback will only
+  include the _new_ assigns passed from this function.  Pre-existing assigns may
+  be found in `socket.assigns`.
 
   While a component may always be updated from the parent by updating some
   parent assigns which will re-render the child, thus invoking
@@ -2020,7 +2029,7 @@ defmodule Phoenix.LiveView do
         {:ok,
          socket
          |> assign(:foo, "bar")
-         |> assign_async(:org, fn -> {:ok, %{org: fetch_org!(slug)} end)
+         |> assign_async(:org, fn -> {:ok, %{org: fetch_org!(slug)}} end)
          |> assign_async([:profile, :rank], fn -> {:ok, %{profile: ..., rank: ...}} end)}
       end
 
@@ -2036,7 +2045,7 @@ defmodule Phoenix.LiveView do
   Starts an ansynchronous task and invokes callback to handle the result.
 
   The task is linked to the caller and errors/exits are wrapped.
-  The result of the task is sent to the `handle_async/3` callback
+  The result of the task is sent to the `c:handle_async/3` callback
   of the caller LiveView or LiveComponent.
 
   ## Examples
@@ -2045,7 +2054,7 @@ defmodule Phoenix.LiveView do
         {:ok,
          socket
          |> assign(:org, AsyncResult.loading())
-         |> start_async(:my_task, fn -> fetch_org!(id) end)
+         |> start_async(:my_task, fn -> fetch_org!(id) end)}
       end
 
       def handle_async(:my_task, {:ok, fetched_org}, socket) do
@@ -2072,9 +2081,9 @@ defmodule Phoenix.LiveView do
   the key passed to `start_async/3`.
 
   The underlying process will be killed with the provided reason, or
-  {:shutdown, :cancel}`. if no reason is passed. For `assign_async/3`
+  `{:shutdown, :cancel}`. if no reason is passed. For `assign_async/3`
   operations, the `:failed` field will be set to `{:exit, reason}`.
-  For `start_async/3`, the `handle_async/3` callback will receive
+  For `start_async/3`, the `c:handle_async/3` callback will receive
   `{:exit, reason}` as the result.
 
   Returns the `%Phoenix.LiveView.Socket{}`.

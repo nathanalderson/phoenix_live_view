@@ -316,7 +316,7 @@ defmodule Phoenix.Component do
   ### The default slot
 
   The example above uses the default slot, accessible as an assign named `@inner_block`, to render
-  HEEx content via the `render_slot/2` function.
+  HEEx content via the `render_slot/1` function.
 
   If the values rendered in the slot need to be dynamic, you can pass a second value back to the
   HEEx content by calling `render_slot/2`:
@@ -787,7 +787,7 @@ defmodule Phoenix.Component do
       raise "~H requires a variable named \"assigns\" to exist and be set to a map"
     end
 
-    annotate_root? = Module.get_attribute(__CALLER__.module, :__debug_annotations__)
+    debug_annotations? = Module.get_attribute(__CALLER__.module, :__debug_annotations__)
 
     options = [
       engine: Phoenix.LiveView.TagEngine,
@@ -797,7 +797,8 @@ defmodule Phoenix.Component do
       indentation: meta[:indentation] || 0,
       source: expr,
       tag_handler: Phoenix.LiveView.HTMLEngine,
-      annotate_root_tag: annotate_root? && (&Phoenix.LiveView.HTMLEngine.annotate_root_tag/1)
+      annotate_tagged_content:
+        debug_annotations? && (&Phoenix.LiveView.HTMLEngine.annotate_tagged_content/1)
     ]
 
     EEx.compile_string(expr, options)
@@ -2464,7 +2465,11 @@ defmodule Phoenix.Component do
   end
 
   @doc """
-  Generates a link for live and href navigation.
+  Generates a link to a given route.
+
+  To navigate across pages, using traditional browser navigation, use
+  the `href` attribute. To patch the current LiveView or navigate
+  across LiveViews, use `patch` and `navigate` respectively.
 
   [INSERT LVATTRDOCS]
 

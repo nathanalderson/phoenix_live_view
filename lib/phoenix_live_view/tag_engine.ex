@@ -169,8 +169,7 @@ defmodule Phoenix.LiveView.TagEngine do
       previous_token_slot?: false,
       source: Keyword.fetch!(opts, :source),
       tag_handler: tag_handler,
-      annotate_root_tag: Keyword.get(opts, :annotate_root_tag),
-      has_tags?: false
+      annotate_tagged_content: Keyword.get(opts, :annotate_tagged_content)
     }
   end
 
@@ -187,10 +186,11 @@ defmodule Phoenix.LiveView.TagEngine do
       |> validate_unclosed_tags!("template")
 
     opts = [root: token_state.root || false]
+    %{caller: caller, annotate_tagged_content: annotate_tagged_content} = state
 
     opts =
-      if anno_func = state.has_tags? && state.caller && state.annotate_root_tag do
-        Keyword.put(opts, :root_annotation, anno_func.(state.caller))
+      if annotate_tagged_content && caller && has_tags?(tokens) do
+        [body_annotation: annotate_tagged_content.(caller)] ++ opts
       else
         opts
       end
@@ -201,6 +201,14 @@ defmodule Phoenix.LiveView.TagEngine do
       require Phoenix.LiveView.TagEngine
       unquote(ast)
     end
+  end
+
+  defp has_tags?(tokens) do
+    Enum.any?(tokens, fn
+      {:text, _, _} -> false
+      {:expr, _, _} -> false
+      _ -> true
+    end)
   end
 
   defp validate_unclosed_tags!(%{tags: []} = state, _context) do
@@ -231,7 +239,7 @@ defmodule Phoenix.LiveView.TagEngine do
            source: source,
            indentation: indentation,
            tag_handler: tag_handler,
-           annotate_root_tag: annotate_root_tag
+           annotate_tagged_content: annotate_tagged_content
          },
          root
        ) do
@@ -248,7 +256,7 @@ defmodule Phoenix.LiveView.TagEngine do
       previous_token_slot?: false,
       indentation: indentation,
       tag_handler: tag_handler,
-      annotate_root_tag: annotate_root_tag,
+      annotate_tagged_content: annotate_tagged_content
     }
   end
 
@@ -267,16 +275,13 @@ defmodule Phoenix.LiveView.TagEngine do
   def handle_text(state, meta, text) do
     %{file: file, indentation: indentation, tokens: tokens, cont: cont, source: source} = state
     tokenizer_state = Tokenizer.init(indentation, file, source, state.tag_handler)
-
-    {tokens, cont, tokenizer_has_tags?} =
-      Tokenizer.tokenize(text, meta, tokens, cont, tokenizer_state)
+    {tokens, cont} = Tokenizer.tokenize(text, meta, tokens, cont, tokenizer_state)
 
     %{
       state
       | tokens: tokens,
         cont: cont,
-        source: state.source,
-        has_tags?: state.has_tags? || tokenizer_has_tags?
+        source: state.source
     }
   end
 
@@ -369,13 +374,7 @@ defmodule Phoenix.LiveView.TagEngine do
   end
 
   defp push_tag(state, token) do
-    # If we have a void tag, we don't actually push it into the stack.
-    with {:tag, name, _attrs, _meta} <- token,
-         true <- state.tag_handler.void?(name) do
-      state
-    else
-      _ -> %{state | tags: [token | state.tags]}
-    end
+    %{state | tags: [token | state.tags]}
   end
 
   defp pop_tag!(
@@ -389,17 +388,28 @@ defmodule Phoenix.LiveView.TagEngine do
          %{tags: [{type, tag_open_name, _attrs, tag_open_meta} | _]} = state,
          {:close, type, tag_close_name, tag_close_meta}
        ) do
+    hint = closing_void_hint(tag_close_name, state)
+
     message = """
     unmatched closing tag. Expected </#{tag_open_name}> for <#{tag_open_name}> \
-    at line #{tag_open_meta.line}, got: </#{tag_close_name}>\
+    at line #{tag_open_meta.line}, got: </#{tag_close_name}>#{hint}\
     """
 
     raise_syntax_error!(message, tag_close_meta, state)
   end
 
   defp pop_tag!(state, {:close, _type, tag_name, tag_meta}) do
-    message = "missing opening tag for </#{tag_name}>"
+    hint = closing_void_hint(tag_name, state)
+    message = "missing opening tag for </#{tag_name}>#{hint}"
     raise_syntax_error!(message, tag_meta, state)
+  end
+
+  defp closing_void_hint(tag_name, state) do
+    if state.tag_handler.void?(tag_name) do
+      " (note <#{tag_name}> is a void tag and cannot have any content)"
+    else
+      ""
+    end
   end
 
   ## handle_token
@@ -429,7 +439,7 @@ defmodule Phoenix.LiveView.TagEngine do
   # Remote function component (self close)
 
   defp handle_token(
-         {:remote_component, name, attrs, %{self_close: true} = tag_meta},
+         {:remote_component, name, attrs, %{closing: :self} = tag_meta},
          state
        ) do
     attrs = remove_phx_no_break(attrs)
@@ -529,7 +539,7 @@ defmodule Phoenix.LiveView.TagEngine do
   # Slot (self close)
 
   defp handle_token(
-         {:slot, slot_name, attrs, %{self_close: true} = tag_meta},
+         {:slot, slot_name, attrs, %{closing: :self} = tag_meta},
          state
        ) do
     slot_name = String.to_atom(slot_name)
@@ -584,7 +594,7 @@ defmodule Phoenix.LiveView.TagEngine do
 
   # Local function component (self close)
 
-  defp handle_token({:local_component, name, attrs, %{self_close: true} = tag_meta}, state) do
+  defp handle_token({:local_component, name, attrs, %{closing: :self} = tag_meta}, state) do
     fun = String.to_atom(name)
     %{line: line, column: column} = tag_meta
     attrs = remove_phx_no_break(attrs)
@@ -676,8 +686,8 @@ defmodule Phoenix.LiveView.TagEngine do
 
   # HTML element (self close)
 
-  defp handle_token({:tag, name, attrs, %{self_close: true} = tag_meta}, state) do
-    suffix = if state.tag_handler.void?(name), do: ">", else: "></#{name}>"
+  defp handle_token({:tag, name, attrs, %{closing: closing} = tag_meta}, state) do
+    suffix = if closing == :void, do: ">", else: "></#{name}>"
     attrs = remove_phx_no_break(attrs)
     validate_phx_attrs!(attrs, tag_meta, state)
 
@@ -741,21 +751,20 @@ defmodule Phoenix.LiveView.TagEngine do
   #   pop_special_attrs!(state, ":for", attrs, %{}, state)
   #   => {%{}, []}
   defp pop_special_attrs!(attrs, tag_meta, state) do
-    Enum.reduce([:for, :if], {tag_meta, attrs}, fn attr, {meta_acc, attrs_acc} ->
-      string_attr = ":#{attr}"
+    Enum.reduce([for: ":for", if: ":if"], {tag_meta, attrs}, fn
+      {attr, string_attr}, {meta_acc, attrs_acc} ->
+        attrs_acc
+        |> List.keytake(string_attr, 0)
+        |> raise_if_duplicated_special_attr!(state)
+        |> case do
+          {{^string_attr, expr, meta}, attrs} ->
+            parsed_expr = parse_expr!(expr, state.file)
+            validate_quoted_special_attr!(string_attr, parsed_expr, meta, state)
+            {Map.put(meta_acc, attr, parsed_expr), attrs}
 
-      attrs_acc
-      |> List.keytake(string_attr, 0)
-      |> raise_if_duplicated_special_attr!(state)
-      |> case do
-        {{^string_attr, expr, meta}, attrs} ->
-          parsed_expr = parse_expr!(expr, state.file)
-          validate_quoted_special_attr!(string_attr, parsed_expr, meta, state)
-          {Map.put(meta_acc, attr, parsed_expr), attrs}
-
-        nil ->
-          {meta_acc, attrs_acc}
-      end
+          nil ->
+            {meta_acc, attrs_acc}
+        end
     end)
   end
 
@@ -1333,13 +1342,25 @@ defmodule Phoenix.LiveView.TagEngine do
          _attr,
          id?
        ) do
-    if value in ~w(ignore stream append prepend replace) do
-      validate_phx_attrs!(t, meta, state, "phx-update", id?)
-    else
-      message =
-        "the value of the attribute \"phx-update\" must be: ignore, stream, append, prepend, or replace"
+    cond do
+      value in ~w(ignore stream replace) ->
+        validate_phx_attrs!(t, meta, state, "phx-update", id?)
 
-      raise_syntax_error!(message, attr_meta, state)
+      value in ~w(append prepend) ->
+        line = meta[:line] || state.caller.line
+
+        IO.warn(
+          "phx-update=\"#{value}\" is deprecated, please use streams instead",
+          Macro.Env.stacktrace(%{state.caller | line: line})
+        )
+
+        validate_phx_attrs!(t, meta, state, "phx-update", id?)
+
+      true ->
+        message =
+          "the value of the attribute \"phx-update\" must be: ignore, stream, append, prepend, or replace"
+
+        raise_syntax_error!(message, attr_meta, state)
     end
   end
 

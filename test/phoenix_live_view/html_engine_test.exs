@@ -1326,6 +1326,8 @@ defmodule Phoenix.LiveView.HTMLEngineTest do
       assert eval("<Kernel.to_string />").root == false
       assert eval("<Kernel.to_string></Kernel.to_string>").root == false
       assert eval("<div :for={item <- @items}><%= item %></div>").root == false
+      assert eval("<!-- comment --><div></div>").root == false
+      assert eval("<div></div><!-- comment -->").root == false
     end
   end
 
@@ -1402,6 +1404,19 @@ defmodule Phoenix.LiveView.HTMLEngineTest do
       end)
     end
 
+    test "unmatched open/close tags with void tags" do
+      message = """
+      test/phoenix_live_view/html_engine_test.exs:1:16: unmatched closing tag. Expected </div> for <div> at line 1, got: </link> (note <link> is a void tag and cannot have any content)
+        |
+      1 | <div><link>Text</link></div>
+        |                ^\
+      """
+
+      assert_raise(ParseError, message, fn ->
+        eval("<div><link>Text</link></div>")
+      end)
+    end
+
     test "invalid remote tag" do
       message = """
       test/phoenix_live_view/html_engine_test.exs:1:1: invalid tag <Foo>
@@ -1431,6 +1446,19 @@ defmodule Phoenix.LiveView.HTMLEngineTest do
         text
           </span>
         """)
+      end)
+    end
+
+    test "missing open tag with void tag" do
+      message = """
+      test/phoenix_live_view/html_engine_test.exs:1:11: missing opening tag for </link> (note <link> is a void tag and cannot have any content)
+        |
+      1 | <link>Text</link>
+        |           ^\
+      """
+
+      assert_raise(ParseError, message, fn ->
+        eval("<link>Text</link>")
       end)
     end
 
@@ -1711,10 +1739,8 @@ defmodule Phoenix.LiveView.HTMLEngineTest do
 
   describe "handle errors in expressions" do
     test "inside attribute values" do
-      assert_raise(
-        SyntaxError,
-        ~r"test/phoenix_live_view/html_engine_test.exs:12:22: syntax error before: ','",
-        fn ->
+      exception =
+        assert_raise SyntaxError, fn ->
           opts = [line: 10, indentation: 8]
 
           eval(
@@ -1727,14 +1753,15 @@ defmodule Phoenix.LiveView.HTMLEngineTest do
             opts
           )
         end
-      )
+
+      message = Exception.message(exception)
+      assert message =~ "test/phoenix_live_view/html_engine_test.exs:12:22:"
+      assert message =~ "syntax error before: ','"
     end
 
     test "inside root attribute value" do
-      assert_raise(
-        SyntaxError,
-        ~r"test/phoenix_live_view/html_engine_test.exs:12:16: syntax error before: ','",
-        fn ->
+      exception =
+        assert_raise SyntaxError, fn ->
           opts = [line: 10, indentation: 8]
 
           eval(
@@ -1747,7 +1774,10 @@ defmodule Phoenix.LiveView.HTMLEngineTest do
             opts
           )
         end
-      )
+
+      message = Exception.message(exception)
+      assert message =~ "test/phoenix_live_view/html_engine_test.exs:12:16:"
+      assert message =~ "syntax error before: ','"
     end
   end
 

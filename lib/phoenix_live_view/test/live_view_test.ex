@@ -1174,6 +1174,7 @@ defmodule Phoenix.LiveViewTest do
     * `:size` - the byte size of the content
     * `:type` - the MIME type of the file
     * `:relative_path` - for simulating webkitdirectory metadata
+    * `:meta` - optional metadata sent by the client
 
   ## Examples
 
@@ -1882,7 +1883,7 @@ defmodule Phoenix.LiveViewTest do
           {:ok, %{ref: ref, config: config, entries: entries_resp, errors: errors}} ->
             if entry_errors = errors[entry_ref] do
               UploadClient.allowed_ack(upload, ref, config, entry_name, entries_resp, errors)
-              {:error, for(reason <- entry_errors , do: [entry_ref, reason])}
+              {:error, for(reason <- entry_errors, do: [entry_ref, reason])}
             else
               case UploadClient.allowed_ack(upload, ref, config, entry_name, entries_resp, errors) do
                 :ok -> render_chunk(upload, entry_name, percent)

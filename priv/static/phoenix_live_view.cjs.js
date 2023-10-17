@@ -40,6 +40,7 @@ var PHX_DROP_TARGET = "drop-target";
 var PHX_ACTIVE_ENTRY_REFS = "data-phx-active-refs";
 var PHX_LIVE_FILE_UPDATED = "phx:live-file:updated";
 var PHX_SKIP = "data-phx-skip";
+var PHX_MAGIC_ID = "data-phx-id";
 var PHX_PRUNE = "data-phx-prune";
 var PHX_PAGE_LOADING = "page-loading";
 var PHX_CONNECTED_CLASS = "phx-connected";
@@ -94,6 +95,7 @@ var DEFAULTS = {
 };
 var DYNAMICS = "d";
 var STATIC = "s";
+var ROOT = "r";
 var COMPONENTS = "c";
 var EVENTS = "e";
 var REPLY = "r";
@@ -827,7 +829,8 @@ var UploadEntry = class {
       relative_path: this.file.webkitRelativePath,
       size: this.file.size,
       type: this.file.type,
-      ref: this.ref
+      ref: this.ref,
+      meta: typeof this.file.meta === "function" ? this.file.meta() : void 0
     };
   }
   uploader(uploaders) {
@@ -884,6 +887,9 @@ var LiveUploader = class {
       entry.relative_path = file.webkitRelativePath;
       entry.type = file.type;
       entry.size = file.size;
+      if (typeof file.meta === "function") {
+        entry.meta = file.meta();
+      }
       fileData[uploadRef].push(entry);
     });
     return fileData;
@@ -1771,19 +1777,18 @@ var DOMPatch = class {
     let updates = [];
     let appendPrependUpdates = [];
     let externalFormTriggered = null;
-    let diffHTML = liveSocket.time("premorph container prep", () => {
-      return this.buildDiffHTML(container, html, phxUpdate, targetContainer);
-    });
     this.trackBefore("added", container);
     this.trackBefore("updated", container, container);
     liveSocket.time("morphdom", () => {
       this.streams.forEach(([ref, inserts, deleteIds, reset]) => {
         Object.entries(inserts).forEach(([key, [streamAt, limit]]) => {
-          this.streamInserts[key] = { ref, streamAt, limit };
+          this.streamInserts[key] = { ref, streamAt, limit, resetKept: false };
         });
         if (reset !== void 0) {
           dom_default.all(container, `[${PHX_STREAM_REF}="${ref}"]`, (child) => {
-            if (!inserts[child.id]) {
+            if (inserts[child.id]) {
+              this.streamInserts[child.id].resetKept = true;
+            } else {
               this.removeStreamChildElement(child);
             }
           });
@@ -1795,10 +1800,13 @@ var DOMPatch = class {
           }
         });
       });
-      morphdom_esm_default(targetContainer, diffHTML, {
+      morphdom_esm_default(targetContainer, html, {
         childrenOnly: targetContainer.getAttribute(PHX_COMPONENT) === null,
         getNodeKey: (node) => {
-          return dom_default.isPhxDestroyed(node) ? null : node.id;
+          if (dom_default.isPhxDestroyed(node)) {
+            return null;
+          }
+          return node.getAttribute && node.getAttribute(PHX_MAGIC_ID) || node.id;
         },
         skipFromChildren: (from) => {
           return from.getAttribute(phxUpdate) === PHX_STREAM;
@@ -1854,6 +1862,25 @@ var DOMPatch = class {
             this.trackAfter("phxChildAdded", el);
           }
           added.push(el);
+        },
+        onBeforeElChildrenUpdated: (fromEl, toEl) => {
+          if (fromEl.getAttribute(phxUpdate) === PHX_STREAM) {
+            let toIds = Array.from(toEl.children).map((child) => child.id);
+            Array.from(fromEl.children).filter((child) => {
+              let { resetKept } = this.getStreamInsert(child);
+              return resetKept;
+            }).sort((a, b) => {
+              let aIdx = toIds.indexOf(a.id);
+              let bIdx = toIds.indexOf(b.id);
+              if (aIdx === bIdx) {
+                return 0;
+              } else if (aIdx < bIdx) {
+                return -1;
+              } else {
+                return 1;
+              }
+            }).forEach((child) => fromEl.appendChild(child));
+          }
         },
         onNodeDiscarded: (el) => this.onNodeDiscarded(el),
         onBeforeNodeDiscarded: (el) => {
@@ -2029,7 +2056,7 @@ var DOMPatch = class {
     return this.cidPatch;
   }
   skipCIDSibling(el) {
-    return el.nodeType === Node.ELEMENT_NODE && el.getAttribute(PHX_SKIP) !== null;
+    return el.nodeType === Node.ELEMENT_NODE && el.hasAttribute(PHX_SKIP);
   }
   targetCIDContainer(html) {
     if (!this.isCIDPatch()) {
@@ -2042,35 +2069,99 @@ var DOMPatch = class {
       return first && first.parentNode;
     }
   }
-  buildDiffHTML(container, html, phxUpdate, targetContainer) {
-    let isCIDPatch = this.isCIDPatch();
-    let isCIDWithSingleRoot = isCIDPatch && targetContainer.getAttribute(PHX_COMPONENT) === this.targetCID.toString();
-    if (!isCIDPatch || isCIDWithSingleRoot) {
-      return html;
-    } else {
-      let diffContainer = null;
-      let template = document.createElement("template");
-      diffContainer = dom_default.cloneNode(targetContainer);
-      let [firstComponent, ...rest] = dom_default.findComponentNodeList(diffContainer, this.targetCID);
-      template.innerHTML = html;
-      rest.forEach((el) => el.remove());
-      Array.from(diffContainer.childNodes).forEach((child) => {
-        if (child.id && child.nodeType === Node.ELEMENT_NODE && child.getAttribute(PHX_COMPONENT) !== this.targetCID.toString()) {
-          child.setAttribute(PHX_SKIP, "");
-          child.innerHTML = "";
-        }
-      });
-      Array.from(template.content.childNodes).forEach((el) => diffContainer.insertBefore(el, firstComponent));
-      firstComponent.remove();
-      return diffContainer.outerHTML;
-    }
-  }
   indexOf(parent, child) {
     return Array.from(parent.children).indexOf(child);
   }
 };
 
 // js/phoenix_live_view/rendered.js
+var VOID_TAGS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "command",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "keygen",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr"
+]);
+var endingTagNameChars = new Set([">", "/", " ", "\n", "	", "\r"]);
+var modifyRoot = (html, attrs, clearInnerHTML) => {
+  let i = 0;
+  let insideComment = false;
+  let beforeTag, afterTag, tag, tagNameEndsAt, newHTML;
+  while (i < html.length) {
+    let char = html.charAt(i);
+    if (insideComment) {
+      if (char === "-" && html.slice(i, i + 3) === "-->") {
+        insideComment = false;
+        i += 3;
+      } else {
+        i++;
+      }
+    } else if (char === "<" && html.slice(i, i + 4) === "<!--") {
+      insideComment = true;
+      i += 4;
+    } else if (char === "<") {
+      beforeTag = html.slice(0, i);
+      let iAtOpen = i;
+      for (i; i < html.length; i++) {
+        if (endingTagNameChars.has(html.charAt(i))) {
+          break;
+        }
+      }
+      tagNameEndsAt = i;
+      tag = html.slice(iAtOpen + 1, tagNameEndsAt);
+      break;
+    } else {
+      i++;
+    }
+  }
+  if (!tag) {
+    throw new Error(`malformed html ${html}`);
+  }
+  let closeAt = html.length - 1;
+  insideComment = false;
+  while (closeAt >= beforeTag.length + tag.length) {
+    let char = html.charAt(closeAt);
+    if (insideComment) {
+      if (char === "-" && html.slice(closeAt - 3, closeAt) === "<!-") {
+        insideComment = false;
+        closeAt -= 4;
+      } else {
+        closeAt -= 1;
+      }
+    } else if (char === ">" && html.slice(closeAt - 2, closeAt) === "--") {
+      insideComment = true;
+      closeAt -= 3;
+    } else if (char === ">") {
+      break;
+    } else {
+      closeAt -= 1;
+    }
+  }
+  afterTag = html.slice(closeAt + 1, html.length);
+  let attrsStr = Object.keys(attrs).map((attr) => attrs[attr] === true ? attr : `${attr}="${attrs[attr]}"`).join(" ");
+  if (clearInnerHTML) {
+    if (VOID_TAGS.has(tag)) {
+      newHTML = `<${tag}${attrsStr === "" ? "" : " "}${attrsStr}/>`;
+    } else {
+      newHTML = `<${tag}${attrsStr === "" ? "" : " "}${attrsStr}></${tag}>`;
+    }
+  } else {
+    let rest = html.slice(tagNameEndsAt, closeAt + 1);
+    newHTML = `<${tag}${attrsStr === "" ? "" : " "}${attrsStr}${rest}`;
+  }
+  return [newHTML, beforeTag, afterTag];
+};
 var Rendered = class {
   static extract(diff) {
     let { [REPLY]: reply, [EVENTS]: events, [TITLE]: title } = diff;
@@ -2082,19 +2173,20 @@ var Rendered = class {
   constructor(viewId, rendered) {
     this.viewId = viewId;
     this.rendered = {};
+    this.magicId = 0;
     this.mergeDiff(rendered);
   }
   parentViewId() {
     return this.viewId;
   }
   toString(onlyCids) {
-    let [str, streams] = this.recursiveToString(this.rendered, this.rendered[COMPONENTS], onlyCids);
+    let [str, streams] = this.recursiveToString(this.rendered, this.rendered[COMPONENTS], onlyCids, true, {});
     return [str, streams];
   }
-  recursiveToString(rendered, components = rendered[COMPONENTS], onlyCids) {
+  recursiveToString(rendered, components = rendered[COMPONENTS], onlyCids, changeTracking, rootAttrs) {
     onlyCids = onlyCids ? new Set(onlyCids) : null;
     let output = { buffer: "", components, onlyCids, streams: new Set() };
-    this.toOutputBuffer(rendered, null, output);
+    this.toOutputBuffer(rendered, null, output, changeTracking, rootAttrs);
     return [output.buffer, output.streams];
   }
   componentCIDs(diff) {
@@ -2139,10 +2231,10 @@ var Rendered = class {
           tdiff = oldc[-scid];
         }
         stat = tdiff[STATIC];
-        ndiff = this.cloneMerge(tdiff, cdiff);
+        ndiff = this.cloneMerge(tdiff, cdiff, true);
         ndiff[STATIC] = stat;
       } else {
-        ndiff = cdiff[STATIC] !== void 0 ? cdiff : this.cloneMerge(oldc[cid] || {}, cdiff);
+        ndiff = cdiff[STATIC] !== void 0 || oldc[cid] === void 0 ? cdiff : this.cloneMerge(oldc[cid], cdiff, false);
       }
       cache[cid] = ndiff;
       return ndiff;
@@ -2167,21 +2259,31 @@ var Rendered = class {
         target[key] = val;
       }
     }
+    if (target[ROOT]) {
+      target.newRender = true;
+    }
   }
-  cloneMerge(target, source) {
+  cloneMerge(target, source, pruneMagicId) {
     let merged = { ...target, ...source };
     for (let key in merged) {
       let val = source[key];
       let targetVal = target[key];
       if (isObject(val) && val[STATIC] === void 0 && isObject(targetVal)) {
-        merged[key] = this.cloneMerge(targetVal, val);
+        merged[key] = this.cloneMerge(targetVal, val, pruneMagicId);
       }
+    }
+    if (pruneMagicId) {
+      delete merged.magicId;
+      delete merged.newRender;
+    } else if (target[ROOT]) {
+      merged.newRender = true;
     }
     return merged;
   }
   componentToString(cid) {
-    let [str, streams] = this.recursiveCIDToString(this.rendered[COMPONENTS], cid, null, false);
-    return [str, streams];
+    let [str, streams] = this.recursiveCIDToString(this.rendered[COMPONENTS], cid, null);
+    let [strippedHTML, _before, _after] = modifyRoot(str, {});
+    return [strippedHTML, streams];
   }
   pruneCIDs(cids) {
     cids.forEach((cid) => delete this.rendered[COMPONENTS][cid]);
@@ -2199,16 +2301,45 @@ var Rendered = class {
       return part;
     }
   }
-  toOutputBuffer(rendered, templates, output) {
+  nextMagicID() {
+    this.magicId++;
+    return `${this.parentViewId()}-${this.magicId}`;
+  }
+  toOutputBuffer(rendered, templates, output, changeTracking, rootAttrs = {}) {
     if (rendered[DYNAMICS]) {
       return this.comprehensionToBuffer(rendered, templates, output);
     }
     let { [STATIC]: statics } = rendered;
     statics = this.templateStatic(statics, templates);
+    let isRoot = rendered[ROOT];
+    let prevBuffer = output.buffer;
+    if (isRoot) {
+      output.buffer = "";
+    }
+    if (changeTracking && isRoot && !rendered.magicId) {
+      rendered.newRender = true;
+      rendered.magicId = this.nextMagicID();
+    }
     output.buffer += statics[0];
     for (let i = 1; i < statics.length; i++) {
-      this.dynamicToBuffer(rendered[i - 1], templates, output);
+      this.dynamicToBuffer(rendered[i - 1], templates, output, changeTracking);
       output.buffer += statics[i];
+    }
+    if (isRoot) {
+      let skip = false;
+      let attrs;
+      if (changeTracking || Object.keys(rootAttrs).length > 0) {
+        skip = !rendered.newRender;
+        attrs = { [PHX_MAGIC_ID]: rendered.magicId, ...rootAttrs };
+      } else {
+        attrs = rootAttrs;
+      }
+      if (skip) {
+        attrs[PHX_SKIP] = true;
+      }
+      let [newRoot, commentBefore, commentAfter] = modifyRoot(output.buffer, attrs, skip);
+      rendered.newRender = false;
+      output.buffer = prevBuffer + commentBefore + newRoot + commentAfter;
     }
   }
   comprehensionToBuffer(rendered, templates, output) {
@@ -2220,7 +2351,8 @@ var Rendered = class {
       let dynamic = dynamics[d];
       output.buffer += statics[0];
       for (let i = 1; i < statics.length; i++) {
-        this.dynamicToBuffer(dynamic[i - 1], compTemplates, output);
+        let changeTracking = false;
+        this.dynamicToBuffer(dynamic[i - 1], compTemplates, output, changeTracking);
         output.buffer += statics[i];
       }
     }
@@ -2230,74 +2362,26 @@ var Rendered = class {
       output.streams.add(stream);
     }
   }
-  dynamicToBuffer(rendered, templates, output) {
+  dynamicToBuffer(rendered, templates, output, changeTracking) {
     if (typeof rendered === "number") {
       let [str, streams] = this.recursiveCIDToString(output.components, rendered, output.onlyCids);
       output.buffer += str;
       output.streams = new Set([...output.streams, ...streams]);
     } else if (isObject(rendered)) {
-      this.toOutputBuffer(rendered, templates, output);
+      this.toOutputBuffer(rendered, templates, output, changeTracking, {});
     } else {
       output.buffer += rendered;
     }
   }
-  recursiveCIDToString(components, cid, onlyCids, allowRootComments = true) {
+  recursiveCIDToString(components, cid, onlyCids) {
     let component = components[cid] || logError(`no component for CID ${cid}`, components);
-    let template = document.createElement("template");
-    let [html, streams] = this.recursiveToString(component, components, onlyCids);
-    template.innerHTML = html;
-    let container = template.content;
+    let attrs = { [PHX_COMPONENT]: cid };
     let skip = onlyCids && !onlyCids.has(cid);
-    let [hasChildNodes, hasChildComponents] = Array.from(container.childNodes).reduce(([hasNodes, hasComponents], child, i) => {
-      if (child.nodeType === Node.ELEMENT_NODE) {
-        if (child.getAttribute(PHX_COMPONENT)) {
-          return [hasNodes, true];
-        }
-        child.setAttribute(PHX_COMPONENT, cid);
-        if (!child.id) {
-          child.id = `${this.parentViewId()}-${cid}-${i}`;
-        }
-        if (skip) {
-          child.setAttribute(PHX_SKIP, "");
-          child.innerHTML = "";
-        }
-        return [true, hasComponents];
-      } else if (child.nodeType === Node.COMMENT_NODE) {
-        if (!allowRootComments) {
-          child.remove();
-        }
-        return [hasNodes, hasComponents];
-      } else {
-        if (child.nodeValue.trim() !== "") {
-          logError(`only HTML element tags are allowed at the root of components.
-
-got: "${child.nodeValue.trim()}"
-
-within:
-`, template.innerHTML.trim());
-          child.replaceWith(this.createSpan(child.nodeValue, cid));
-          return [true, hasComponents];
-        } else {
-          child.remove();
-          return [hasNodes, hasComponents];
-        }
-      }
-    }, [false, false]);
-    if (!hasChildNodes && !hasChildComponents) {
-      logError("expected at least one HTML element tag inside a component, but the component is empty:\n", template.innerHTML.trim());
-      return [this.createSpan("", cid).outerHTML, streams];
-    } else if (!hasChildNodes && hasChildComponents) {
-      logError("expected at least one HTML element tag directly inside a component, but only subcomponents were found. A component must render at least one HTML tag directly inside itself.", template.innerHTML.trim());
-      return [template.innerHTML, streams];
-    } else {
-      return [template.innerHTML, streams];
-    }
-  }
-  createSpan(text, cid) {
-    let span = document.createElement("span");
-    span.innerText = text;
-    span.setAttribute(PHX_COMPONENT, cid);
-    return span;
+    component.newRender = !skip;
+    component.magicId = `${this.parentViewId()}-c-${cid}`;
+    let changeTracking = true;
+    let [html, streams] = this.recursiveToString(component, components, onlyCids, changeTracking, attrs);
+    return [html, streams];
   }
 };
 
@@ -2366,10 +2450,12 @@ var ViewHook = class {
     this.__listeners.delete(callbackRef);
   }
   upload(name, files) {
-    return this.__view.dispatchUploads(name, files);
+    return this.__view.dispatchUploads(null, name, files);
   }
   uploadTo(phxTarget, name, files) {
-    return this.__view.withinTargets(phxTarget, (view) => view.dispatchUploads(name, files));
+    return this.__view.withinTargets(phxTarget, (view, targetCtx) => {
+      view.dispatchUploads(targetCtx, name, files);
+    });
   }
   __cleanup__() {
     this.__listeners.forEach((callbackRef) => this.removeHandleEvent(callbackRef));
@@ -2653,9 +2739,10 @@ var View = class {
     this.children = this.parent ? null : {};
     this.root.children[this.id] = {};
     this.channel = this.liveSocket.channel(`lv:${this.id}`, () => {
+      let url = this.href && this.expandURL(this.href);
       return {
-        redirect: this.redirect ? this.href : void 0,
-        url: this.redirect ? void 0 : this.href || void 0,
+        redirect: this.redirect ? url : void 0,
+        url: this.redirect ? void 0 : url || void 0,
         params: this.connectParams(liveReferer),
         session: this.getSession(),
         static: this.getStatic(),
@@ -3576,14 +3663,25 @@ var View = class {
       });
     });
   }
-  dispatchUploads(name, filesOrBlobs) {
-    let inputs = dom_default.findUploadInputs(this.el).filter((el) => el.name === name);
+  dispatchUploads(targetCtx, name, filesOrBlobs) {
+    let targetElement = this.targetCtxElement(targetCtx) || this.el;
+    let inputs = dom_default.findUploadInputs(targetElement).filter((el) => el.name === name);
     if (inputs.length === 0) {
       logError(`no live file inputs found matching the name "${name}"`);
     } else if (inputs.length > 1) {
       logError(`duplicate live file inputs found matching the name "${name}"`);
     } else {
       dom_default.dispatchEvent(inputs[0], PHX_TRACK_UPLOADS, { detail: { files: filesOrBlobs } });
+    }
+  }
+  targetCtxElement(targetCtx) {
+    if (isCid(targetCtx)) {
+      let [target] = dom_default.findComponentNodeList(this.el, targetCtx);
+      return target;
+    } else if (targetCtx) {
+      return targetCtx;
+    } else {
+      return null;
     }
   }
   pushFormRecovery(form, newCid, callback) {
